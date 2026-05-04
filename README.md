@@ -47,8 +47,6 @@ Output:
 ✅ Generated docker-compose.yml
 ```
 
-> The grader deletes these files and re-runs `init` to verify they regenerate correctly.
-
 ---
 
 ### `validate` — 5 pre-flight checks
