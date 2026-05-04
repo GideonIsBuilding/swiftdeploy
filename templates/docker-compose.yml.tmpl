@@ -1,0 +1,43 @@
+services:
+  app:
+    image: {{ .Services.Image }}
+    environment:
+      - MODE={{ .Services.Mode }}
+      - APP_VERSION={{ .Services.Version }}
+      - APP_PORT={{ .Services.Port }}
+    networks:
+      - {{ .Network.Name }}
+    volumes:
+      - app-logs:/var/log/app
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    user: "1000:1000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:{{ .Services.Port }}/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  nginx:
+    image: {{ .Nginx.Image }}
+    ports:
+      - "{{ .Nginx.Port }}:{{ .Nginx.Port }}"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx-logs:/var/log/nginx
+    networks:
+      - {{ .Network.Name }}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  {{ .Network.Name }}:
+    driver: {{ .Network.DriverType }}
+
+volumes:
+  app-logs:
+  nginx-logs:
