@@ -18,15 +18,13 @@ http {
     server {
         listen {{ .Nginx.Port }};
 
-        add_header X-Deployed-By swiftdeploy always;
-
         location / {
             proxy_pass         http://app:{{ .Services.Port }};
             proxy_set_header   Host              $host;
             proxy_set_header   X-Real-IP         $remote_addr;
             proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
 
-            # Forward X-Mode set by the upstream app
+            add_header         X-Deployed-By     swiftdeploy always;
             add_header         X-Mode            $upstream_http_x_mode always;
 
             error_page 502 = @error502;
