@@ -7,13 +7,56 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// ── Process start time (for uptime) ─────────────────────────────────────────
+// ── Process start time ────────────────────────────────────────────────────────
 
 var startTime = time.Now()
+
+// ── Prometheus metrics ────────────────────────────────────────────────────────
+
+var (
+	httpRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total HTTP requests by method, path, and status code.",
+		},
+		[]string{"method", "path", "status_code"},
+	)
+
+	httpRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "HTTP request latency in seconds.",
+			Buckets: prometheus.DefBuckets, // .005 .01 .025 .05 .1 .25 .5 1 2.5 5 10
+		},
+		[]string{"method", "path"},
+	)
+
+	appUptimeSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "app_uptime_seconds",
+		Help: "Seconds since the app process started.",
+	})
+
+	// 0 = stable, 1 = canary
+	appModeGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "app_mode",
+		Help: "Current deployment mode: 0=stable, 1=canary.",
+	})
+
+	// 0 = none, 1 = slow, 2 = error
+	chaosActiveGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "chaos_active",
+		Help: "Active chaos mode: 0=none, 1=slow, 2=error.",
+	})
+)
 
 // ── Chaos state ───────────────────────────────────────────────────────────────
 
@@ -29,8 +72,8 @@ const (
 type chaosState struct {
 	mu       sync.RWMutex
 	mode     chaosMode
-	duration int     // seconds, for "slow"
-	rate     float64 // 0-1, for "error"
+	duration int
+	rate     float64
 }
 
 var chaos = &chaosState{}
@@ -41,9 +84,19 @@ func (c *chaosState) set(mode chaosMode, duration int, rate float64) {
 	c.mode = mode
 	c.duration = duration
 	c.rate = rate
+
+	// Update Prometheus gauge
+	switch mode {
+	case chaosSlow:
+		chaosActiveGauge.Set(1)
+	case chaosError:
+		chaosActiveGauge.Set(2)
+	default:
+		chaosActiveGauge.Set(0)
+	}
 }
 
-func (c *chaosState) apply() (shouldError bool) {
+func (c *chaosState) apply() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	switch c.mode {
@@ -66,16 +119,47 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+// ── responseWriter wrapper (captures status code for metrics) ─────────────────
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sw *statusWriter) WriteHeader(code int) {
+	sw.status = code
+	sw.ResponseWriter.WriteHeader(code)
+}
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 
-// modeMiddleware injects X-Mode: canary on every response when in canary mode,
-// and applies any active chaos effects.
+// metricsMiddleware records request count and duration for every request.
+// /metrics itself is excluded to avoid self-referential noise.
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		start := time.Now()
+
+		next.ServeHTTP(sw, r)
+
+		duration := time.Since(start).Seconds()
+		statusStr := strconv.Itoa(sw.status)
+
+		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+	})
+}
+
+// modeMiddleware injects X-Mode header in canary and applies chaos.
 func modeMiddleware(appMode string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if appMode == "canary" {
 			w.Header().Set("X-Mode", "canary")
-
-			// Apply chaos (error injection happens before writing body)
 			if chaos.apply() {
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -88,10 +172,12 @@ func modeMiddleware(appMode string, next http.Handler) http.Handler {
 	})
 }
 
-// jsonMiddleware sets Content-Type on all responses
+// jsonMiddleware sets Content-Type on all non-metrics responses.
 func jsonMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/metrics" {
+			w.Header().Set("Content-Type", "application/json")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -142,7 +228,7 @@ func handleChaos(w http.ResponseWriter, r *http.Request) {
 		}
 		chaos.set(chaosSlow, body.Duration, 0)
 		json.NewEncoder(w).Encode(map[string]string{
-			"chaos": "slow",
+			"chaos":    "slow",
 			"duration": fmt.Sprintf("%ds", body.Duration),
 		})
 
@@ -159,9 +245,7 @@ func handleChaos(w http.ResponseWriter, r *http.Request) {
 
 	case "recover":
 		chaos.set(chaosNone, 0, 0)
-		json.NewEncoder(w).Encode(map[string]string{
-			"chaos": "recovered",
-		})
+		json.NewEncoder(w).Encode(map[string]string{"chaos": "recovered"})
 
 	default:
 		http.Error(w, `{"error":"unknown chaos mode — use: slow, error, recover"}`, http.StatusBadRequest)
@@ -175,16 +259,33 @@ func main() {
 	version := getEnv("APP_VERSION", "1.0.0")
 	port := getEnv("APP_PORT", "3000")
 
+	// Set mode gauge at startup
+	if appMode == "canary" {
+		appModeGauge.Set(1)
+	} else {
+		appModeGauge.Set(0)
+	}
+
+	// Update uptime gauge every second in background
+	go func() {
+		for {
+			appUptimeSeconds.Set(time.Since(startTime).Seconds())
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleRoot(appMode, version))
 	mux.HandleFunc("/healthz", handleHealthz)
+	mux.Handle("/metrics", promhttp.Handler()) // ← NEW
 
 	if appMode == "canary" {
 		mux.HandleFunc("/chaos", handleChaos)
 		log.Printf("⚠️  Canary mode — chaos endpoint active at POST /chaos")
 	}
 
-	handler := jsonMiddleware(modeMiddleware(appMode, mux))
+	// Middleware chain: metrics → json → mode → mux
+	handler := metricsMiddleware(jsonMiddleware(modeMiddleware(appMode, mux)))
 
 	log.Printf("🚀 SwiftDeploy app starting on :%s (mode=%s, version=%s)", port, appMode, version)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
