@@ -1,0 +1,12 @@
+{
+  "infrastructure": {
+    "min_disk_free_gb": 10.0,
+    "max_cpu_load": 2.0,
+    "max_memory_used_percent": 90.0
+  },
+  "canary": {
+    "max_error_rate_percent": 1.0,
+    "max_p99_latency_ms": 500.0
+  },
+  "contact": "ops@swiftdeploy.local"
+}
