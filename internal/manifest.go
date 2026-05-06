@@ -12,6 +12,7 @@ type Manifest struct {
 	Services ServicesConfig `yaml:"services"`
 	Nginx    NginxConfig    `yaml:"nginx"`
 	Network  NetworkConfig  `yaml:"network"`
+	OPA      OPAConfig      `yaml:"opa"`
 }
 
 type ServicesConfig struct {
@@ -30,6 +31,12 @@ type NginxConfig struct {
 type NetworkConfig struct {
 	Name       string `yaml:"name"`
 	DriverType string `yaml:"driver_type"`
+}
+
+type OPAConfig struct {
+	Image       string `yaml:"image"`
+	Port        int    `yaml:"port"`
+	PoliciesDir string `yaml:"policies_dir"`
 }
 
 // LoadManifest reads and parses manifest.yaml
@@ -65,6 +72,12 @@ func (m *Manifest) ValidateFields() error {
 	if m.Network.DriverType == "" {
 		return fmt.Errorf("network.driver_type is required")
 	}
+	if m.OPA.Image == "" {
+		return fmt.Errorf("opa.image is required")
+	}
+	if m.OPA.Port == 0 {
+		return fmt.Errorf("opa.port is required")
+	}
 	return nil
 }
 
@@ -81,7 +94,6 @@ func UpdateMode(path, mode string) error {
 		return fmt.Errorf("parsing manifest: %w", err)
 	}
 
-	// doc.Content[0] is the top-level mapping node
 	root := doc.Content[0]
 	for i := 0; i < len(root.Content)-1; i += 2 {
 		if root.Content[i].Value == "services" {

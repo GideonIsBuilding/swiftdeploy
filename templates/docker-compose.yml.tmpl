@@ -34,6 +34,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  opa:
+    image: {{ .OPA.Image }}
+    ports:
+      - "127.0.0.1:{{ .OPA.Port }}:8181"
+    volumes:
+      - {{ .OPA.PoliciesDir }}:/policies:ro
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=error"
+      - "/policies"
+    networks:
+      - {{ .Network.Name }}
+    restart: unless-stopped
+
 networks:
   {{ .Network.Name }}:
     driver: {{ .Network.DriverType }}
