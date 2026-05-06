@@ -8,6 +8,8 @@ RUN go mod download
 
 COPY app/ ./
 
+RUN go mod tidy
+
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app .
 
 # Stage 2: Run

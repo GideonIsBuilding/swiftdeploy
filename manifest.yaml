@@ -1,7 +1,7 @@
 services:
     image: swift-deploy-1-node:latest
     port: 3000
-    mode: stable
+    mode: canary
     version: "1.0.0"
 nginx:
     image: nginx:latest
@@ -11,6 +11,6 @@ network:
     name: swiftdeploy-net
     driver_type: bridge
 opa:
-  image: openpolicyagent/opa:latest-rootless 
-  port: 8181
-  policies_dir: ./policies
+    image: openpolicyagent/opa:latest
+    port: 8181
+    policies_dir: ./policies

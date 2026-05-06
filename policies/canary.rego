@@ -1,21 +1,12 @@
-# canary.rego
-# Domain: canary service health before promotion.
-# Owns exactly one question: "Is the canary safe to promote?"
-# Thresholds come from data.json — never hardcoded here.
-
 package swiftdeploy.canary
 
 import rego.v1
-
-# ── Default: deny unless explicitly allowed ───────────────────────────────────
 
 default allow := false
 
 allow if {
 	count(violations) == 0
 }
-
-# ── Violations ────────────────────────────────────────────────────────────────
 
 violations contains msg if {
 	input.error_rate_percent > data.canary.max_error_rate_percent
@@ -32,8 +23,6 @@ violations contains msg if {
 		[input.p99_latency_ms, data.canary.max_p99_latency_ms],
 	)
 }
-
-# ── Decision (always carry reasoning) ────────────────────────────────────────
 
 decision := {
 	"allow":      allow,

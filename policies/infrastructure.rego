@@ -1,22 +1,12 @@
-# infrastructure.rego
-# Domain: host resource safety before deployment.
-# Owns exactly one question: "Is the host healthy enough to deploy?"
-# Thresholds come from data.json — never hardcoded here.
-
 package swiftdeploy.infrastructure
 
 import rego.v1
 
-# ── Default: deny unless explicitly allowed ───────────────────────────────────
-
 default allow := false
 
-# allow only when there are zero violations
 allow if {
 	count(violations) == 0
 }
-
-# ── Violations ────────────────────────────────────────────────────────────────
 
 violations contains msg if {
 	input.disk_free_gb < data.infrastructure.min_disk_free_gb
@@ -41,8 +31,6 @@ violations contains msg if {
 		[input.memory_used_percent, data.infrastructure.max_memory_used_percent],
 	)
 }
-
-# ── Decision (always carry reasoning) ────────────────────────────────────────
 
 decision := {
 	"allow":      allow,
